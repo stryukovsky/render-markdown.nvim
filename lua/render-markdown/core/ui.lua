@@ -40,7 +40,7 @@ end
 ---@param force boolean
 function M.update(buf, win, event, force)
     log.buf('info', 'Update', buf, event, ('force %s'):format(force))
-    M.updater.new(buf, win, force):start()
+    M.updater.new(buf, win, force):start(event)
 end
 
 ---@class render.md.ui.Updater
@@ -67,16 +67,23 @@ function Updater.new(buf, win, force)
     return self
 end
 
-function Updater:start()
+---@private
+---@param event? string
+function Updater:start(event)
     if not env.valid(self.buf, self.win) then
         return
     end
+    -- Only an in-window cursor move can be applied before redraw. A view
+    -- change still has to reparse, and that stays debounced.
+    local sync = (event == 'CursorMoved' or event == 'CursorMovedI')
+        and not self:changed()
     self.decorator:schedule(
         self:changed() and not env.buf.empty(self.buf),
         self.config.debounce,
         log.runtime('update', function()
             self:run()
-        end)
+        end),
+        sync
     )
 end
 
@@ -169,12 +176,9 @@ end
 ---@private
 function Updater:display()
     local range = self:hidden()
-    -- Cursor row of a wrapped table must stay a real line, or j/k move
-    -- through zero-height concealed rows and the screen cursor never updates.
-    local row = env.row.get(self.buf, self.win)
     self.decorator:display(M.ns, function(extmark)
         return self:hide(extmark, range)
-    end, row)
+    end)
     state.on.render({ buf = self.buf, win = self.win })
 end
 
@@ -208,6 +212,16 @@ end
 ---@return boolean
 function Updater:hide(extmark, range)
     local mark = extmark:get()
+
+    -- Wrapped rows are conceal_lines, so 'wrap' does not keep a blank screen
+    -- row for the source line. The cursor row has to be a real line: j/k on a
+    -- zero-height row draws the cursor on the next visible line.
+    if mark.replace then
+        local row = env.row.get(self.buf, self.win)
+        if row and row == mark.start_row then
+            return true
+        end
+    end
 
     -- not in top level or mark level modes -> hide
     local show = env.mode.join(self.config.render_modes, mark.modes)

@@ -62,29 +62,19 @@ end
 
 ---@param ns integer
 ---@param hide fun(extmark: render.md.Extmark): boolean
----@param cursor_row? integer
-function Decorator:display(ns, hide, cursor_row)
+function Decorator:display(ns, hide)
     local visible = {} ---@type render.md.Mark[]
     for _, extmark in ipairs(self.marks) do
         if hide(extmark) then
             extmark:hide(ns, self.buf)
         else
-            local mark = extmark:get()
-            -- Every wrapped row stays a real line. Concealing the ones above
-            -- the cursor makes k draw the cursor on the table head until the
-            -- next render gives that row a height.
-            if mark.replace then
-                local kind = 'row:' .. tostring(self.n)
-                extmark:show(ns, self.buf, kind, replacements.cursor_opts(mark), 0)
-            else
-                extmark:show(ns, self.buf, 'default')
-            end
-            visible[#visible + 1] = mark
+            extmark:show(ns, self.buf)
+            visible[#visible + 1] = extmark:get()
         end
     end
 
     local line_count = vim.api.nvim_buf_line_count(self.buf)
-    local generated = replacements.resolve(visible, line_count, cursor_row)
+    local generated = replacements.resolve(visible, line_count)
     local current = {} ---@type render.md.Mark[]
     for _, extmark in ipairs(self.generated) do
         current[#current + 1] = extmark:get()
@@ -106,7 +96,8 @@ end
 ---@param debounce boolean
 ---@param ms integer
 ---@param callback fun()
-function Decorator:schedule(debounce, ms, callback)
+---@param sync? boolean
+function Decorator:schedule(debounce, ms, callback, sync)
     if debounce and ms > 0 then
         self.timer:start(ms, 0, function()
             self.running = false
@@ -115,6 +106,13 @@ function Decorator:schedule(debounce, ms, callback)
             self.running = true
             vim.schedule(callback)
         end
+    elseif sync and not self.running then
+        -- j/k has already moved onto the cursor row. Reveal it before redraw:
+        -- a concealed wrapped row has no height, so the cursor is drawn on the
+        -- next visible line and the lines below it collapse.
+        self.running = true
+        callback()
+        self.running = false
     else
         vim.schedule(callback)
     end
