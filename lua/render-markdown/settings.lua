@@ -1498,9 +1498,12 @@ M.overrides.default = {
     },
     -- Override for different filetype values, @see :h 'filetype'.
     filetype = {},
-    -- Override for preview buffer.
+    -- Override for preview buffer. Tables are written into the buffer as text,
+    -- so the extmark table renderer stays off.
     preview = {
         render_modes = true,
+        anti_conceal = { enabled = false },
+        pipe_table = { enabled = false },
     },
 }
 

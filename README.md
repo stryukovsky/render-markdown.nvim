@@ -132,7 +132,7 @@ use({
 | `:RenderMarkdown get`           | `require('render-markdown').get()`          | Return current state                              |
 | `:RenderMarkdown set bool?`     | `require('render-markdown').set(bool?)`     | Sets state, `nil` to toggle                       |
 | `:RenderMarkdown set_buf bool?` | `require('render-markdown').set_buf(bool?)` | Sets state for current buffer, `nil` to toggle    |
-| `:RenderMarkdown preview`       | `require('render-markdown').preview()`      | Show rendered buffer to the side                  |
+| `:RenderMarkdown preview`       | `require('render-markdown').preview()`      | Open a listed preview buffer wrapped at 90 columns |
 | `:RenderMarkdown log`           | `require('render-markdown').log()`          | Opens the log file for this plugin                |
 | `:RenderMarkdown expand`        | `require('render-markdown').expand()`       | Increase anti-conceal margin above and below by 1 |
 | `:RenderMarkdown contract`      | `require('render-markdown').contract()`     | Decrease anti-conceal margin above and below by 1 |
