@@ -36,6 +36,18 @@ describe('wrap', function()
         end
     end)
 
+    it('packs a source row and a preview row into one integer', function()
+        local packed = wrap.pack(3, 19)
+        local source_row, preview_row = wrap.unpack(packed)
+        assert.equal(3, source_row)
+        assert.equal(19, preview_row)
+        local again = wrap.pack(0, 0)
+        assert.equal(0, again)
+        local source_zero, preview_zero = wrap.unpack(again)
+        assert.equal(0, source_zero)
+        assert.equal(0, preview_zero)
+    end)
+
     it('skips protected rows', function()
         local lines = {
             'alpha beta gamma',

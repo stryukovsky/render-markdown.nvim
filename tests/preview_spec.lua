@@ -95,4 +95,45 @@ describe('preview', function()
         require('render-markdown.core.preview').close(src)
         assert.equal(src, vim.api.nvim_get_current_buf())
     end)
+
+    it('follows the cursor between the source and the preview', function()
+        local prose = string.rep('alpha ', 40)
+        util.setup.text({ prose, '', 'tail' })
+        local src = vim.api.nvim_get_current_buf()
+        local preview_win = vim.api.nvim_get_current_win()
+        vim.cmd('split')
+        local source_win = vim.api.nvim_get_current_win()
+        vim.api.nvim_set_current_win(preview_win)
+        vim.api.nvim_win_set_cursor(preview_win, { 1, 0 })
+
+        local preview = require('render-markdown.core.preview')
+        preview.open()
+        assert.equal(src, vim.api.nvim_win_get_buf(source_win))
+        local dst = vim.api.nvim_win_get_buf(preview_win)
+        assert.not_equal(src, dst)
+
+        vim.api.nvim_set_current_win(source_win)
+        vim.api.nvim_win_set_cursor(source_win, { 3, 0 })
+        -- Headless Neovim does not emit these events on its own.
+        vim.api.nvim_exec_autocmds('CursorMoved', { buffer = src })
+        local followed = vim.api.nvim_win_get_cursor(preview_win)
+        assert.is_true(followed[1] > 1)
+        assert.equal(0, followed[2])
+
+        vim.api.nvim_set_current_win(preview_win)
+        vim.api.nvim_win_set_cursor(preview_win, { 1, 0 })
+        vim.api.nvim_exec_autocmds('CursorMoved', { buffer = dst })
+        assert.same({ 1, 0 }, vim.api.nvim_win_get_cursor(source_win))
+
+        vim.api.nvim_set_current_win(source_win)
+        vim.api.nvim_buf_set_lines(src, 0, -1, false, { 'short', '', 'tail' })
+        vim.api.nvim_exec_autocmds('TextChanged', { buffer = src })
+        assert.same(
+            { 'short', '', 'tail' },
+            vim.api.nvim_buf_get_lines(dst, 0, -1, false)
+        )
+
+        preview.close(src)
+        vim.cmd('only')
+    end)
 end)

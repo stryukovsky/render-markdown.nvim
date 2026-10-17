@@ -1,7 +1,7 @@
 local env = require('render-markdown.lib.env')
 local manager = require('render-markdown.core.manager')
 local state = require('render-markdown.state')
-local table_text = require('render-markdown.lib.table_text')
+local sync = require('render-markdown.sync')
 
 ---@class render.md.Preview
 local M = {}
@@ -28,10 +28,19 @@ M.buffers = {}
 ---@type table<integer, boolean>
 M.restore = {}
 
----source buffer -> source row to first preview row
+---source buffer -> document used to map cursors
 ---@private
----@type table<integer, table<integer, integer>>
-M.maps = {}
+---@type table<integer, render.md.sync.Document>
+M.docs = {}
+
+---source buffer -> last source cursor, 0-based row and byte column
+---@private
+---@type table<integer, integer[]>
+M.anchor = {}
+
+---@private
+---@type boolean
+M.moving = false
 
 ---@param buf integer
 ---@return integer?
@@ -59,6 +68,10 @@ function M.open(src_buf)
     end
     if existing then
         local win = env.win.current()
+        if vim.api.nvim_win_get_buf(win) == src_buf then
+            local cursor = vim.api.nvim_win_get_cursor(win)
+            M.anchor[src_buf] = { cursor[1] - 1, cursor[2] }
+        end
         vim.api.nvim_win_set_buf(win, existing)
         M.window(existing)
         M.refresh(src_buf, existing)
@@ -73,6 +86,7 @@ function M.open(src_buf)
         src_win = env.win.current()
     end
     local cursor = vim.api.nvim_win_get_cursor(src_win)
+    M.anchor[src_buf] = { cursor[1] - 1, cursor[2] }
 
     M.restore[src_buf] = state.get(src_buf).enabled
     manager.set_buf(src_buf, false)
@@ -97,8 +111,14 @@ function M.open(src_buf)
     vim.api.nvim_win_set_buf(src_win, dst_buf)
     M.window(dst_buf)
     env.buf.set(dst_buf, 'filetype', env.buf.get(src_buf, 'filetype'))
-    local row = (M.maps[src_buf] or {})[cursor[1] - 1] or 0
-    pcall(vim.api.nvim_win_set_cursor, src_win, { row + 1, 0 })
+    local doc = M.docs[src_buf]
+    local row, col = 0, 0
+    if doc then
+        row, col = doc:to_preview(cursor[1] - 1, cursor[2])
+    end
+    M.moving = true
+    M.set_cursor(src_win, row + 1, col)
+    M.moving = false
 
     vim.api.nvim_create_autocmd({ 'TextChanged', 'TextChangedI' }, {
         group = M.group,
@@ -112,6 +132,22 @@ function M.open(src_buf)
             then
                 M.refresh(src_buf, dst)
             end
+        end,
+    })
+
+    vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI' }, {
+        group = M.group,
+        buffer = src_buf,
+        callback = function()
+            M.on_cursor(src_buf)
+        end,
+    })
+
+    vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI' }, {
+        group = M.group,
+        buffer = dst_buf,
+        callback = function()
+            M.on_cursor(dst_buf)
         end,
     })
 
@@ -132,7 +168,8 @@ function M.open(src_buf)
                 return
             end
             M.buffers[src_buf] = nil
-            M.maps[src_buf] = nil
+            M.docs[src_buf] = nil
+            M.anchor[src_buf] = nil
             local restore = M.restore[src_buf]
             M.restore[src_buf] = nil
             vim.api.nvim_clear_autocmds({ group = M.group, buffer = src_buf })
@@ -148,7 +185,8 @@ function M.open(src_buf)
         callback = function()
             local dst = M.buffers[src_buf]
             M.buffers[src_buf] = nil
-            M.maps[src_buf] = nil
+            M.docs[src_buf] = nil
+            M.anchor[src_buf] = nil
             M.restore[src_buf] = nil
             if dst and vim.api.nvim_buf_is_valid(dst) then
                 vim.api.nvim_buf_delete(dst, { force = true })
@@ -163,15 +201,23 @@ function M.close(src)
     if not dst then
         return
     end
+    local doc = M.docs[src]
     M.buffers[src] = nil
-    M.maps[src] = nil
+    M.docs[src] = nil
+    M.anchor[src] = nil
     local restore = M.restore[src]
     M.restore[src] = nil
     vim.api.nvim_clear_autocmds({ group = M.group, buffer = src })
     if vim.api.nvim_buf_is_valid(dst) then
         for _, win in ipairs(vim.api.nvim_list_wins()) do
             if vim.api.nvim_win_get_buf(win) == dst then
+                local row, col = 0, 0
+                if doc then
+                    local cursor = vim.api.nvim_win_get_cursor(win)
+                    row, col = doc:to_source(cursor[1] - 1, cursor[2])
+                end
                 pcall(vim.api.nvim_win_set_buf, win, src)
+                M.set_cursor(win, row + 1, col)
             end
         end
         vim.api.nvim_buf_delete(dst, { force = true })
@@ -200,34 +246,115 @@ end
 function M.refresh(src, dst)
     local src_lines = vim.api.nvim_buf_get_lines(src, 0, -1, false)
     local config = state.get(src).pipe_table
-    local wrapped, map, kinds =
-        table_text.lines(src_lines, M.table_rows(src, src_lines), M.columns, {
-            padding = config.padding,
-            border = config.border,
-            indicator = config.alignment_indicator,
-        })
-    M.maps[src] = map
+    local doc = sync.build(src_lines, M.table_rows(src, src_lines), M.columns, {
+        padding = config.padding,
+        border = config.border,
+        indicator = config.alignment_indicator,
+    })
+    M.docs[src] = doc
 
     local dst_lines = vim.api.nvim_buf_get_lines(dst, 0, -1, false)
-    if not vim.deep_equal(dst_lines, wrapped) then
-        local view = nil ---@type vim.fn.winsaveview.ret?
-        local win = env.buf.win(dst)
-        if env.win.valid(win) and env.win.buf(win) == dst then
-            view = vim.api.nvim_win_call(win, vim.fn.winsaveview)
-        end
-
+    if not vim.deep_equal(dst_lines, doc.lines) then
+        M.moving = true
         env.buf.set(dst, 'modifiable', true)
-        vim.api.nvim_buf_set_lines(dst, 0, -1, false, wrapped)
+        vim.api.nvim_buf_set_lines(dst, 0, -1, false, doc.lines)
         env.buf.set(dst, 'modifiable', false)
         env.buf.set(dst, 'modified', false)
+        M.moving = false
+    end
+    M.highlight(dst, doc.kinds)
+    M.follow_source(src)
+end
 
-        if view and env.win.valid(win) then
-            pcall(vim.api.nvim_win_call, win, function()
-                vim.fn.winrestview(view)
-            end)
+---@private
+---@param win integer
+---@param row integer 1-based
+---@param col integer 0-based byte
+function M.set_cursor(win, row, col)
+    if not env.win.valid(win) then
+        return
+    end
+    local ok, current = pcall(vim.api.nvim_win_get_cursor, win)
+    if ok and current[1] == row and current[2] == col then
+        return
+    end
+    pcall(vim.api.nvim_win_set_cursor, win, { row, col })
+end
+
+---Move the other buffer's cursor to the relative position in its paragraph.
+---@private
+---@param buf integer
+function M.on_cursor(buf)
+    if M.moving then
+        return
+    end
+    local src = M.buffers[buf] and buf or M.get(buf)
+    if not src then
+        return
+    end
+    local doc = M.docs[src]
+    if not doc then
+        return
+    end
+    local origin = env.win.current()
+    if not env.win.valid(origin) or env.win.buf(origin) ~= buf then
+        return
+    end
+    local cursor = vim.api.nvim_win_get_cursor(origin)
+    local row, col = cursor[1] - 1, cursor[2]
+    M.moving = true
+    if buf == src then
+        M.anchor[src] = { row, col }
+        local dst = M.buffers[src]
+        if dst and vim.api.nvim_buf_is_valid(dst) then
+            local preview_row, preview_col = doc:to_preview(row, col)
+            for _, win in ipairs(env.buf.wins(dst)) do
+                M.set_cursor(win, preview_row + 1, preview_col)
+            end
+        end
+    else
+        local source_row, source_col = doc:to_source(row, col)
+        M.anchor[src] = { source_row, source_col }
+        if vim.api.nvim_buf_is_valid(src) then
+            for _, win in ipairs(env.buf.wins(src)) do
+                M.set_cursor(win, source_row + 1, source_col)
+            end
         end
     end
-    M.highlight(dst, kinds)
+    M.moving = false
+end
+
+---After the preview is redrawn, put its cursor on the source cursor.
+---@private
+---@param src integer
+function M.follow_source(src)
+    if M.moving then
+        return
+    end
+    local doc = M.docs[src]
+    local dst = M.buffers[src]
+    if not doc or not dst or not vim.api.nvim_buf_is_valid(dst) then
+        return
+    end
+    local row, col ---@type integer, integer
+    local wins = env.buf.wins(src)
+    local current = env.win.current()
+    if #wins > 0 then
+        local win = vim.tbl_contains(wins, current) and current or wins[1]
+        local cursor = vim.api.nvim_win_get_cursor(win)
+        row, col = cursor[1] - 1, cursor[2]
+        M.anchor[src] = { row, col }
+    elseif M.anchor[src] then
+        row, col = M.anchor[src][1], M.anchor[src][2]
+    else
+        return
+    end
+    local preview_row, preview_col = doc:to_preview(row, col)
+    M.moving = true
+    for _, win in ipairs(env.buf.wins(dst)) do
+        M.set_cursor(win, preview_row + 1, preview_col)
+    end
+    M.moving = false
 end
 
 ---@private

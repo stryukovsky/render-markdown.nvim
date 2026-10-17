@@ -3,6 +3,12 @@ local str = require('render-markdown.lib.str')
 ---@class render.md.Wrap
 local M = {}
 
+---Source row uses the low 26 bits, preview row the next 26 bits.
+---Both fit in the exact integer range of a Lua number.
+local ROW_BITS = 26
+local ROW_MASK = 2 ^ ROW_BITS - 1
+local ROW_SPAN = 2 ^ ROW_BITS
+
 ---Leading blockquote markers, including the whitespace that follows them.
 ---@param line string
 ---@return string
@@ -166,6 +172,27 @@ function M.lines(lines, protected, width)
         out[1] = ''
     end
     return out, map
+end
+
+---@class render.md.wrap.Piece
+---@field text string
+---Low 26 bits are the source row, the next 26 bits are the preview row.
+---@field rows integer
+
+---@param source_row integer
+---@param preview_row integer
+---@return integer
+function M.pack(source_row, preview_row)
+    local source = bit.band(source_row, ROW_MASK)
+    local preview = bit.band(preview_row, ROW_MASK)
+    return source + preview * ROW_SPAN
+end
+
+---@param rows integer
+---@return integer source_row
+---@return integer preview_row
+function M.unpack(rows)
+    return bit.band(rows, ROW_MASK), math.floor(rows / ROW_SPAN)
 end
 
 return M
