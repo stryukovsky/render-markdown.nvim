@@ -1504,6 +1504,7 @@ M.overrides.default = {
         render_modes = true,
         anti_conceal = { enabled = false },
         pipe_table = { enabled = false },
+        sign = { enabled = false },
     },
 }
 

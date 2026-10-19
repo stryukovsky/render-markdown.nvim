@@ -136,4 +136,57 @@ describe('preview', function()
         preview.close(src)
         vim.cmd('only')
     end)
+
+    it('indexes headings in the preview buffer', function()
+        local cell = string.rep('word ', 30)
+        util.setup.text({
+            '# First',
+            '',
+            '| a | b |',
+            '| --- | --- |',
+            '| ' .. cell .. ' | ' .. cell .. ' |',
+            '',
+            '# Second',
+        }, {
+            completions = { lsp = { enabled = true } },
+        })
+        local src = vim.api.nvim_get_current_buf()
+        local preview = require('render-markdown.core.preview')
+        preview.open()
+        local dst = vim.api.nvim_get_current_buf()
+
+        assert.equal('', vim.bo[dst].buftype)
+        assert.not_equal(
+            vim.api.nvim_buf_get_name(src),
+            vim.api.nvim_buf_get_name(dst)
+        )
+        assert.not_equal('', vim.api.nvim_buf_get_name(dst))
+
+        local lsp = require('render-markdown.integ.lsp')
+        ---@param buf integer
+        ---@param name string
+        ---@return integer?
+        local function heading_line(buf, name)
+            for _, symbol in ipairs(lsp.symbols(buf, 'utf-8') or {}) do
+                if symbol.name == name then
+                    return symbol.selectionRange.start.line
+                end
+            end
+        end
+        local src_second = heading_line(src, 'Second')
+        local dst_second = heading_line(dst, 'Second')
+        assert.equal(0, heading_line(dst, 'First'))
+        assert.is_true(dst_second > src_second)
+
+        local attached = vim.wait(1000, function()
+            local clients = vim.lsp.get_clients({
+                bufnr = dst,
+                name = 'render-markdown',
+            })
+            return #clients == 1
+        end)
+        assert.is_true(attached)
+
+        preview.close(src)
+    end)
 end)

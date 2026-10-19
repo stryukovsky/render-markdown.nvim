@@ -72,6 +72,7 @@ function M.open(src_buf)
             local cursor = vim.api.nvim_win_get_cursor(win)
             M.anchor[src_buf] = { cursor[1] - 1, cursor[2] }
         end
+        env.buf.set(existing, 'buftype', '')
         vim.api.nvim_win_set_buf(win, existing)
         M.window(existing)
         M.refresh(src_buf, existing)
@@ -96,21 +97,26 @@ function M.open(src_buf)
 
     local src_name = vim.api.nvim_buf_get_name(src_buf)
     local label = src_name ~= '' and src_name or tostring(src_buf)
-    pcall(vim.api.nvim_buf_set_name, dst_buf, 'preview://' .. label)
+    pcall(vim.api.nvim_buf_set_name, dst_buf, label .. ' preview')
 
     env.buf.set(dst_buf, 'buflisted', true)
     env.buf.set(dst_buf, 'bufhidden', 'hide')
-    env.buf.set(dst_buf, 'buftype', 'nofile')
     env.buf.set(dst_buf, 'swapfile', false)
-    M.refresh(src_buf, dst_buf)
-    env.buf.set(dst_buf, 'modifiable', false)
+    -- Not a scratch buffer. Neo-tree document symbols ignores buftype=nofile,
+    -- so it would keep the source file's tree and jump there. An ordinary
+    -- buffer with its own name is indexed on its own text.
+    env.buf.set(dst_buf, 'buftype', '')
 
     -- Show the buffer before FileType attaches. Treesitter opens a temporary
     -- window while starting the parser, and the first render must target the
-    -- real window rather than that one.
+    -- real window rather than that one. Lines are written after that, so the
+    -- language server attaches to this buffer and the symbol tree refreshes
+    -- against the preview text.
     vim.api.nvim_win_set_buf(src_win, dst_buf)
     M.window(dst_buf)
     env.buf.set(dst_buf, 'filetype', env.buf.get(src_buf, 'filetype'))
+    M.refresh(src_buf, dst_buf)
+    env.buf.set(dst_buf, 'modifiable', false)
     local doc = M.docs[src_buf]
     local row, col = 0, 0
     if doc then
